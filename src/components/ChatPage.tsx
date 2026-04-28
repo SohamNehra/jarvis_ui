@@ -10,6 +10,9 @@ import {
   createProject,
   streamChat,
   checkHealth,
+  renameChat,
+  deleteChat,
+  moveChatToProject,
 } from '@/lib/api';
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
@@ -156,6 +159,53 @@ export default function ChatPage() {
     setProjects((prev) => [...prev, proj]);
   }, []);
 
+  // ── Chat management (rename / delete / move) ─────────────────────────────
+  const handleRenameChat = useCallback(
+    async (chatName: string, newName: string, projectName?: string) => {
+      try {
+        await renameChat(chatName, newName, projectName);
+        setChats((prev) =>
+          prev.map((c) => (c.name === chatName ? { ...c, name: newName } : c))
+        );
+        if (activeChatName === chatName) updateActiveChatName(newName);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeChatName, updateActiveChatName]
+  );
+
+  const handleDeleteChat = useCallback(
+    async (chatName: string, projectName?: string) => {
+      try {
+        await deleteChat(chatName);
+        setChats((prev) => prev.filter((c) => c.name !== chatName));
+        if (activeChatName === chatName) newChat(projectName);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeChatName, newChat]
+  );
+
+  const handleMoveChat = useCallback(
+    async (chatName: string, newProjectName: string | null) => {
+      try {
+        await moveChatToProject(chatName, newProjectName);
+        setChats((prev) =>
+          prev.map((c) =>
+            c.name === chatName
+              ? { ...c, project_name: newProjectName ?? undefined }
+              : c
+          )
+        );
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    []
+  );
+
   const loadedProjectsRef = useRef<Set<string>>(new Set());
   const handleExpandProject = useCallback(async (projectName: string) => {
     if (loadedProjectsRef.current.has(projectName)) return;
@@ -240,12 +290,13 @@ export default function ChatPage() {
             const running = m.toolUses?.find(
               (t) => t.tool === toolUse.tool && t.status === 'running'
             );
-            if (toolUse.status === 'done' && running) {
+            if (toolUse.status === 'done') {
+              if (!running) return m; // no running tool to complete
               return {
                 ...m,
                 toolUses: m.toolUses?.map((t) =>
                   t.tool === toolUse.tool && t.status === 'running'
-                    ? { ...t, status: 'done' as const, result: toolUse.result }
+                    ? { ...t, status: 'done' as const, result: toolUse.result, endTime: toolUse.endTime }
                     : t
                 ),
               };
@@ -254,15 +305,26 @@ export default function ChatPage() {
           })
         );
       },
-      // onDone — mark complete, THEN update URL (never during streaming)
+      // onDone — close streaming state and flush any still-running tool chips
       () => {
+        const doneAt = Date.now();
         setIsStreaming(false);
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, isStreaming: false } : m
-          )
+          prev.map((m) => {
+            if (m.id !== assistantId) return m;
+            return {
+              ...m,
+              isStreaming: false,
+              // Any tool still showing "running" when the stream ends gets
+              // marked done — handles backends that skip the tool_end event
+              toolUses: m.toolUses?.map((t) =>
+                t.status === 'running'
+                  ? { ...t, status: 'done' as const, endTime: doneAt }
+                  : t
+              ),
+            };
+          })
         );
-        // Safe to update URL now: all message state is committed
         if (isNewChat) {
           router.replace(buildChatUrl(chatName, projName));
         }
@@ -299,6 +361,9 @@ export default function ChatPage() {
         onNewChat={newChat}
         onNewProject={handleNewProject}
         onExpandProject={handleExpandProject}
+        onRenameChat={handleRenameChat}
+        onDeleteChat={handleDeleteChat}
+        onMoveChat={handleMoveChat}
       />
 
       <div className="flex flex-col flex-1 min-w-0">
