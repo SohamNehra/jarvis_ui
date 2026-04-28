@@ -19,7 +19,7 @@ interface Props {
   onExpandProject: (projectName: string) => void;
   onRenameChat: (chatName: string, newName: string, projectName?: string) => void;
   onDeleteChat: (chatName: string, projectName?: string) => void;
-  onMoveChat: (chatName: string, projectName: string | null) => void;
+  onMoveChat: (chatName: string, newProject: string | null, fromProject?: string | null) => void;
   onDeleteProject: (projectName: string) => void;
 }
 
@@ -299,7 +299,7 @@ interface ProjectItemProps {
   onSelectChat: (chatName: string) => void;
   onRenameChat: (chatName: string, newName: string) => void;
   onDeleteChat: (chatName: string) => void;
-  onMoveChat: (chatName: string, projectName: string | null) => void;
+  onMoveChat: (chatName: string, projectName: string | null, fromProject?: string | null) => void;
   onDeleteProject: () => void;
 }
 
@@ -442,7 +442,7 @@ interface ChatItemProps {
   onClick: () => void;
   onRename: (newName: string) => void;
   onDelete: () => void;
-  onMove: (projectName: string | null) => void;
+  onMove: (projectName: string | null, fromProject?: string | null) => void;
 }
 
 function ChatItem({ chat, isSelected, projects, onClick, onRename, onDelete, onMove }: ChatItemProps) {
