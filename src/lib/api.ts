@@ -53,6 +53,13 @@ export async function createProject(name: string, description: string): Promise<
   return res.json();
 }
 
+export async function deleteProject(projectName: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectName)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Failed to delete project: ${res.statusText}`);
+}
+
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
 export async function fetchChats(projectName?: string): Promise<Chat[]> {
@@ -68,7 +75,7 @@ export async function renameChat(chatName: string, newName: string, projectName?
   const res = await fetch(`${API_BASE}/api/chats/${encodeURIComponent(chatName)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ new_name: newName, project_name: projectName }),
+    body: JSON.stringify({ action: "rename", new_name: newName, project_name: projectName ?? null }),
   });
   if (!res.ok) throw new Error(`Failed to rename chat: ${res.statusText}`);
 }
@@ -80,15 +87,14 @@ export async function deleteChat(chatName: string): Promise<void> {
   if (!res.ok) throw new Error(`Failed to delete chat: ${res.statusText}`);
 }
 
-export async function moveChatToProject(chatName: string, projectName: string | null): Promise<void> {
+export async function moveChatToProject(chatName: string, toProject: string | null, fromProject?: string | null): Promise<void> {
   const res = await fetch(`${API_BASE}/api/chats/${encodeURIComponent(chatName)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project_name: projectName }),
+    body: JSON.stringify({ action: "move", to_project: toProject, project_name: fromProject ?? null }),
   });
   if (!res.ok) throw new Error(`Failed to move chat: ${res.statusText}`);
 }
-
 // ── Chat history ──────────────────────────────────────────────────────────────
 
 export async function fetchChatHistory(

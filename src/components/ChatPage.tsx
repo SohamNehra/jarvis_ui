@@ -8,6 +8,7 @@ import {
   fetchChats,
   fetchChatHistory,
   createProject,
+  deleteProject,
   streamChat,
   checkHealth,
   renameChat,
@@ -67,6 +68,8 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const streamingToolUsesRef = useRef<ToolUse[]>([]);
+  const [streamingToolUses, setStreamingToolUses] = useState<ToolUse[]>([]);
 
   // ── Mount: health check + sidebar data + history restore ─────────────────
   useEffect(() => {
@@ -120,6 +123,8 @@ export default function ChatPage() {
     (chatName: string, projectName?: string) => {
       if (chatName === activeChatNameRef.current) return;
       abortRef.current?.abort();
+      streamingToolUsesRef.current = [];
+      setStreamingToolUses([]);
       setMessages([]);
       setError(null);
       setIsStreaming(false);
@@ -139,6 +144,8 @@ export default function ChatPage() {
   const newChat = useCallback(
     (projectName?: string) => {
       abortRef.current?.abort();
+      streamingToolUsesRef.current = [];
+      setStreamingToolUses([]);
       setMessages([]);
       setError(null);
       setIsStreaming(false);
@@ -189,9 +196,9 @@ export default function ChatPage() {
   );
 
   const handleMoveChat = useCallback(
-    async (chatName: string, newProjectName: string | null) => {
+    async (chatName: string, newProjectName: string | null, fromProjectName?: string | null) => {
       try {
-        await moveChatToProject(chatName, newProjectName);
+        await moveChatToProject(chatName, newProjectName, fromProjectName);
         setChats((prev) =>
           prev.map((c) =>
             c.name === chatName
@@ -204,6 +211,20 @@ export default function ChatPage() {
       }
     },
     []
+  );
+
+  const handleDeleteProject = useCallback(
+    async (projectName: string) => {
+      try {
+        await deleteProject(projectName);
+        setProjects((prev) => prev.filter((p) => p.name !== projectName));
+        setChats((prev) => prev.filter((c) => c.project_name !== projectName));
+        if (activeProjectName === projectName) newChat();
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeProjectName, newChat]
   );
 
   const loadedProjectsRef = useRef<Set<string>>(new Set());
@@ -221,6 +242,8 @@ export default function ChatPage() {
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
+    streamingToolUsesRef.current = [];
+    setStreamingToolUses([]);
     setIsStreaming(false);
     setMessages((prev) => prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)));
   }, []);
@@ -232,12 +255,10 @@ export default function ChatPage() {
     setInput('');
     setError(null);
 
-    // Derive chat name (readable slug from message text for new chats)
     const chatName = activeChatName ?? chatNameFromText(text);
     const projName = activeProjectName;
     const isNewChat = !activeChatName;
 
-    // Register new chat in state (does NOT touch the router yet)
     if (isNewChat) {
       updateActiveChatName(chatName);
       setChats((prev) =>
@@ -247,99 +268,82 @@ export default function ChatPage() {
       );
     }
 
-    // Add user + placeholder assistant message BEFORE any await / router call
-    const userMsg: Message = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: text,
-    };
-    const assistantId = `asst-${Date.now()}`;
-    const assistantMsg: Message = {
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      toolUses: [],
-      isStreaming: true,
-    };
+    // Add user + placeholder assistant message BEFORE streaming starts
+    const userMsg: Message = { id: `user-${Date.now()}`, role: 'user', content: text };
+    const assistantMsg: Message = { id: `asst-${Date.now()}`, role: 'assistant', content: '', toolUses: [], isStreaming: true };
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    streamingToolUsesRef.current = [];
+    setStreamingToolUses([]);
     setIsStreaming(true);
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
     await streamChat(
-      {
-        message: text,
-        chat_name: chatName,
-        project_name: projName,
-        use_multi_agent: useMultiAgent,
-      },
-      // onToken — append each incoming token to the assistant message
+      { message: text, chat_name: chatName, project_name: projName, use_multi_agent: useMultiAgent },
+      // onToken — append to last assistant message; never touch toolUses
       (token) => {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + token } : m
-          )
-        );
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === 'assistant') {
+            updated[updated.length - 1] = { ...last, content: last.content + token };
+          }
+          return updated;
+        });
       },
-      // onToolUse — update tool-use chips
+      // onToolUse — update streamingToolUses only; never touch messages
       (toolUse: ToolUse) => {
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== assistantId) return m;
-            const running = m.toolUses?.find(
-              (t) => t.tool === toolUse.tool && t.status === 'running'
+        setStreamingToolUses((prev) => {
+          let next: ToolUse[];
+          if (toolUse.status === 'done') {
+            next = prev.map((t) =>
+              t.tool === toolUse.tool && t.status === 'running'
+                ? { ...t, status: 'done' as const, result: toolUse.result, endTime: toolUse.endTime }
+                : t
             );
-            if (toolUse.status === 'done') {
-              if (!running) return m; // no running tool to complete
-              return {
-                ...m,
-                toolUses: m.toolUses?.map((t) =>
-                  t.tool === toolUse.tool && t.status === 'running'
-                    ? { ...t, status: 'done' as const, result: toolUse.result, endTime: toolUse.endTime }
-                    : t
-                ),
-              };
-            }
-            return { ...m, toolUses: [...(m.toolUses ?? []), toolUse] };
-          })
-        );
+          } else {
+            next = [...prev, toolUse];
+          }
+          streamingToolUsesRef.current = next;
+          return next;
+        });
       },
-      // onDone — close streaming state and flush any still-running tool chips
+      // onDone — read tool uses from ref (avoids nested setState), merge into last message
       () => {
         const doneAt = Date.now();
-        setIsStreaming(false);
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== assistantId) return m;
-            return {
-              ...m,
-              isStreaming: false,
-              // Any tool still showing "running" when the stream ends gets
-              // marked done — handles backends that skip the tool_end event
-              toolUses: m.toolUses?.map((t) =>
-                t.status === 'running'
-                  ? { ...t, status: 'done' as const, endTime: doneAt }
-                  : t
-              ),
-            };
-          })
+        const finalToolUses = streamingToolUsesRef.current.map((t) =>
+          t.status === 'running' ? { ...t, status: 'done' as const, endTime: doneAt } : t
         );
+        streamingToolUsesRef.current = [];
+        setStreamingToolUses([]);
+        setIsStreaming(false);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === 'assistant') {
+            updated[updated.length - 1] = { ...last, isStreaming: false, toolUses: finalToolUses };
+          }
+          return updated;
+        });
         if (isNewChat) {
           router.replace(buildChatUrl(chatName, projName));
         }
       },
       // onError
       (err) => {
+        streamingToolUsesRef.current = [];
+        setStreamingToolUses([]);
         setIsStreaming(false);
         setError(err);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, isStreaming: false, content: m.content || `_Error: ${err}_` }
-              : m
-          )
-        );
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === 'assistant') {
+            updated[updated.length - 1] = { ...last, isStreaming: false, content: last.content || `_Error: ${err}_` };
+          }
+          return updated;
+        });
       },
       ctrl.signal
     );
@@ -364,6 +368,7 @@ export default function ChatPage() {
         onRenameChat={handleRenameChat}
         onDeleteChat={handleDeleteChat}
         onMoveChat={handleMoveChat}
+        onDeleteProject={handleDeleteProject}
       />
 
       <div className="flex flex-col flex-1 min-w-0">
@@ -417,6 +422,7 @@ export default function ChatPage() {
           messages={messages}
           isStreaming={isStreaming}
           chatName={displayChatName}
+          streamingToolUses={streamingToolUses}
         />
 
         <ChatInput

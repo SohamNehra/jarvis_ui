@@ -20,6 +20,7 @@ interface Props {
   onRenameChat: (chatName: string, newName: string, projectName?: string) => void;
   onDeleteChat: (chatName: string, projectName?: string) => void;
   onMoveChat: (chatName: string, projectName: string | null) => void;
+  onDeleteProject: (projectName: string) => void;
 }
 
 function sortChats(chats: Chat[]): Chat[] {
@@ -45,6 +46,7 @@ export default function Sidebar({
   onRenameChat,
   onDeleteChat,
   onMoveChat,
+  onDeleteProject,
 }: Props) {
   const pathname = usePathname();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -164,7 +166,7 @@ export default function Sidebar({
                   onClick={() => { onSelectChat(chat.name); onClose(); }}
                   onRename={(name) => onRenameChat(chat.name, name, chat.project_name)}
                   onDelete={() => onDeleteChat(chat.name, chat.project_name)}
-                  onMove={(proj) => onMoveChat(chat.name, proj)}
+                  onMove={(proj) => onMoveChat(chat.name, proj, chat.project_name)}
                 />
               ))}
             </div>
@@ -227,68 +229,27 @@ export default function Sidebar({
                 const isExpanded = effectiveExpanded.has(project.name);
 
                 return (
-                  <div key={project.name}>
-                    <div className="flex items-center group">
-                      <button
-                        onClick={() => toggleProject(project.name)}
-                        className={[
-                          'flex-1 flex items-center gap-2 px-2 py-2 rounded-l-lg text-sm transition-colors min-w-0',
-                          selectedProject === project.name ? 'text-white' : 'text-[#808090] hover:text-white',
-                        ].join(' ')}
-                      >
-                        <svg
-                          width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-                          className={`flex-shrink-0 transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
-                        >
-                          <path d="m9 18 6-6-6-6" />
-                        </svg>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
-                          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                        </svg>
-                        <span className="truncate font-medium">{project.name}</span>
-                        {projectChats.length > 0 && (
-                          <span className="ml-auto text-[10px] text-[#505060] group-hover:text-[#707080] flex-shrink-0">
-                            {projectChats.length}
-                          </span>
-                        )}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!expandedProjects.has(project.name)) toggleProject(project.name);
-                          onNewChat(project.name);
-                          onClose();
-                        }}
-                        className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1.5 mr-1 rounded text-[#505060] hover:text-white hover:bg-[#2a2a3a] transition-all"
-                        title={`New chat in ${project.name}`}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                          <path d="M12 5v14M5 12h14" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    {isExpanded && (
-                      <div className="ml-5 space-y-0.5 mb-1">
-                        {projectChats.length === 0 ? (
-                          <p className="px-2 py-1.5 text-[11px] text-[#404050] italic">No chats yet</p>
-                        ) : (
-                          projectChats.map((chat) => (
-                            <ChatItem
-                              key={chat.name}
-                              chat={chat}
-                              isSelected={selectedChat === chat.name && selectedProject === project.name}
-                              projects={safeProjects}
-                              onClick={() => { onSelectChat(chat.name, project.name); onClose(); }}
-                              onRename={(name) => onRenameChat(chat.name, name, project.name)}
-                              onDelete={() => onDeleteChat(chat.name, project.name)}
-                              onMove={(proj) => onMoveChat(chat.name, proj)}
-                            />
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
+                  <ProjectItem
+                    key={project.name}
+                    project={project}
+                    projectChats={projectChats}
+                    isExpanded={isExpanded}
+                    isSelected={selectedProject === project.name}
+                    selectedChat={selectedChat}
+                    selectedProject={selectedProject}
+                    safeProjects={safeProjects}
+                    onToggle={() => toggleProject(project.name)}
+                    onNewChat={() => {
+                      if (!expandedProjects.has(project.name)) toggleProject(project.name);
+                      onNewChat(project.name);
+                      onClose();
+                    }}
+                    onSelectChat={(chatName) => { onSelectChat(chatName, project.name); onClose(); }}
+                    onRenameChat={(chatName, name) => onRenameChat(chatName, name, project.name)}
+                    onDeleteChat={(chatName) => onDeleteChat(chatName, project.name)}
+                    onMoveChat={onMoveChat}
+                    onDeleteProject={() => onDeleteProject(project.name)}
+                  />
                 );
               })}
             </div>
@@ -320,6 +281,155 @@ export default function Sidebar({
         </div>
       </aside>
     </>
+  );
+}
+
+// ── ProjectItem ───────────────────────────────────────────────────────────────
+
+interface ProjectItemProps {
+  project: Project;
+  projectChats: Chat[];
+  isExpanded: boolean;
+  isSelected: boolean;
+  selectedChat: string | null;
+  selectedProject: string | null;
+  safeProjects: Project[];
+  onToggle: () => void;
+  onNewChat: () => void;
+  onSelectChat: (chatName: string) => void;
+  onRenameChat: (chatName: string, newName: string) => void;
+  onDeleteChat: (chatName: string) => void;
+  onMoveChat: (chatName: string, projectName: string | null) => void;
+  onDeleteProject: () => void;
+}
+
+function ProjectItem({
+  project, projectChats, isExpanded, isSelected, selectedChat, selectedProject,
+  safeProjects, onToggle, onNewChat, onSelectChat, onRenameChat, onDeleteChat,
+  onMoveChat, onDeleteProject,
+}: ProjectItemProps) {
+  const [showMenu, setShowMenu] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showMenu]);
+
+  return (
+    <div onContextMenu={(e) => { e.preventDefault(); setShowMenu(true); }}>
+      <div className="flex items-center group">
+        <button
+          onClick={onToggle}
+          className={[
+            'flex-1 flex items-center gap-2 px-2 py-2 rounded-l-lg text-sm transition-colors min-w-0',
+            isSelected ? 'text-white' : 'text-[#808090] hover:text-white',
+          ].join(' ')}
+        >
+          <svg
+            width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+            className={`flex-shrink-0 transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
+          >
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          </svg>
+          <span className="truncate font-medium">{project.name}</span>
+          {projectChats.length > 0 && (
+            <span className="ml-auto text-[10px] text-[#505060] group-hover:text-[#707080] flex-shrink-0">
+              {projectChats.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onNewChat(); }}
+          className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded text-[#505060] hover:text-white hover:bg-[#2a2a3a] transition-all"
+          title={`New chat in ${project.name}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <div className="relative">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowMenu(true); }}
+            className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1.5 mr-1 rounded text-[#505060] hover:text-white hover:bg-[#2a2a3a] transition-all"
+            title="Project options"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
+            </svg>
+          </button>
+          {showMenu && (
+            <div
+              ref={menuRef}
+              className="absolute right-0 top-full mt-0.5 z-50 bg-[#1c1c26] border border-[#2a2a3a] rounded-xl shadow-2xl py-1 min-w-[170px]"
+            >
+              <MenuItem
+                icon="🗑"
+                label="Delete Project"
+                danger
+                onClick={() => { setShowConfirm(true); setShowMenu(false); }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {showConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-[#1c1c26] border border-[#2a2a3a] rounded-xl p-5 max-w-sm w-full mx-4 shadow-2xl">
+            <p className="text-white text-sm font-medium mb-1">Delete project?</p>
+            <p className="text-[#808090] text-xs mb-4">
+              Delete &ldquo;{project.name}&rdquo; and all its chats? This cannot be undone.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { onDeleteProject(); setShowConfirm(false); }}
+                className="flex-1 py-2 rounded-lg bg-[#ef4444] hover:bg-[#dc2626] text-white text-xs font-medium transition-colors"
+              >
+                Delete
+              </button>
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="flex-1 py-2 rounded-lg bg-[#2a2a3a] hover:bg-[#3a3a4a] text-[#c0c0d0] text-xs transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isExpanded && (
+        <div className="ml-5 space-y-0.5 mb-1">
+          {projectChats.length === 0 ? (
+            <p className="px-2 py-1.5 text-[11px] text-[#404050] italic">No chats yet</p>
+          ) : (
+            projectChats.map((chat) => (
+              <ChatItem
+                key={chat.name}
+                chat={chat}
+                isSelected={selectedChat === chat.name && selectedProject === project.name}
+                projects={safeProjects}
+                onClick={() => onSelectChat(chat.name)}
+                onRename={(name) => onRenameChat(chat.name, name)}
+                onDelete={() => onDeleteChat(chat.name)}
+                onMove={(proj) => onMoveChat(chat.name, proj, chat.project_name)}
+              />
+            ))
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
